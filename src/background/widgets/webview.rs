@@ -244,6 +244,8 @@ impl WebviewArgs {
         "--no-pings",
         // maybe causes more resources than it reduces
         // "--aggressive-cache-discard",
+        "--enable-precise-memory-info",
+        "--js-flags=--expose-gc",
     ];
 
     const GPU_ARGS: &[&str] = &[
