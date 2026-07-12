@@ -1,4 +1,6 @@
 node_modules
+.local-signing.key
+.local-signing.key.pub
 
 .vscode
 .env
