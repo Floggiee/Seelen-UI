@@ -4,9 +4,9 @@
   import { FileIcon } from "libs/ui/svelte/components/Icon/index.ts";
   import { t } from "../../i18n/index.ts";
   import type { AppOrFileWegItem } from "../../types.ts";
-  import { settingsState, getDockContextMenuAlignment } from "../../state/settings.svelte.ts";
+  import { settingsState } from "../../state/settings.svelte.ts";
   import { windowsState, focused } from "../../state/windows.svelte.ts";
-  import { notifications } from "../../state/system.svelte.ts";
+  import { notifications } from "../../state/getters.svelte.ts";
   import { getUserApplicationContextMenu, launchItem } from "../../appMenu.ts";
   import { triggerPreviewWidget } from "../../previewWidget.ts";
 
@@ -58,7 +58,8 @@
 
   function onContextMenu(e: MouseEvent) {
     e.stopPropagation();
-    const { alignX, alignY } = getDockContextMenuAlignment(settingsState.position);
+    const alignX = settingsState.popupAlignX;
+    const alignY = settingsState.popupAlignY;
     invoke(SeelenCommand.TriggerContextMenu, {
       menu: { ...getUserApplicationContextMenu($t, item, windows), alignX, alignY },
       forwardTo: null,
@@ -71,6 +72,9 @@
     role="menuitem"
     tabindex="0"
     class="weg-item"
+    data-tooltip={item.displayName}
+    data-tooltip-align-x={settingsState.popupAlignX}
+    data-tooltip-align-y={settingsState.popupAlignY}
     onclick={onClick}
     onauxclick={onAuxClick}
     oncontextmenu={onContextMenu}

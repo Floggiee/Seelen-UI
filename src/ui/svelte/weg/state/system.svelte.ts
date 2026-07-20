@@ -1,9 +1,13 @@
 import { SeelenWegSide } from "@seelen-ui/lib/types";
-import { currentMonitorId, monitors, mousePos, notifications, players, trashBinInfo } from "./getters.svelte.ts";
+import { currentMonitorId, monitors, mousePos } from "./getters.svelte.ts";
 
-export { notifications, players, trashBinInfo };
-
-const _currentMonitor = $derived(monitors.value.find((m) => m.id === currentMonitorId)!);
+const _currentMonitor = $derived.by(() => {
+  const monitor = monitors.value.find((m) => m.id === currentMonitorId);
+  if (!monitor) {
+    throw new Error("Current monitor not found");
+  }
+  return monitor;
+});
 
 const _mouseAtEdge = $derived.by((): SeelenWegSide | null => {
   const box = _currentMonitor.rect;

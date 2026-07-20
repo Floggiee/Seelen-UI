@@ -1,64 +1,78 @@
 <script lang="ts">
   import { invoke, SeelenCommand } from "@seelen-ui/lib";
-  import { SeelenWegMode, WegItemType, WegPinnedItemsVisibility, WegTemporalItemsVisibility } from "@seelen-ui/lib/types";
+  import {
+    SeelenWegMode,
+    WegPinnedItemsVisibility,
+    WegTemporalItemsVisibility,
+  } from "@seelen-ui/lib/types";
   import { DragDropProvider, DragOverlay } from "@dnd-kit/svelte";
   import { move } from "@dnd-kit/helpers";
   import { BackgroundByLayers } from "libs/ui/svelte/components/BackgroundByLayers";
   import { t } from "../i18n/index.ts";
-  import { dockState } from "../state/items.svelte.ts";
-  import { settingsState, getDockContextMenuAlignment } from "../state/settings.svelte.ts";
+  import { dockState, listToGroups } from "../state/items.svelte.ts";
+  import { settingsState } from "../state/settings.svelte.ts";
   import { systemState } from "../state/system.svelte.ts";
   import { interactables, getWindowsForItem } from "../state/windows.svelte.ts";
   import { dockShouldBeHidden, setDockIsDraggingItem } from "../state/hidden.svelte.ts";
   import { getSeelenWegMenu } from "../dockMenu.ts";
   import { DND_PLUGINS, DND_SENSORS } from "libs/ui/dnd.ts";
   import type { SwItem } from "../types.ts";
-  import DraggableItem from "./DraggableItem.svelte";
-  import Separator from "./items/Separator.svelte";
-  import StartMenu from "./items/StartMenu.svelte";
-  import ShowDesktop from "./items/ShowDesktop.svelte";
-  import RecycleBin from "./items/RecycleBin.svelte";
-  import MediaSession from "./items/MediaSession.svelte";
-  import UserApplication from "./items/UserApplication.svelte";
+  import DockItemsGroup from "./DockItemsGroup.svelte";
+  import WegItemSwitch from "./WegItemSwitch.svelte";
 
   const settings = $derived(settingsState.value as any);
-  const isHorizontal = $derived(
-    settings?.position === "Top" || settings?.position === "Bottom",
-  );
+  const isHorizontal = $derived(settings?.position === "Top" || settings?.position === "Bottom");
 
-  const visibleItems = $derived.by(() => {
+  function isItemVisible(item: SwItem): boolean {
     const pinnedVisibility = settings?.pinnedItemsVisibility as WegPinnedItemsVisibility;
     const temporalVisibility = settings?.temporalItemsVisibility as WegTemporalItemsVisibility;
     const monitor = systemState.currentMonitor;
 
-    const showPinned =
-      pinnedVisibility === WegPinnedItemsVisibility.Always || monitor.isPrimary;
-    const filterByMonitor =
-      temporalVisibility === WegTemporalItemsVisibility.OnMonitor;
+    const showPinned = pinnedVisibility === WegPinnedItemsVisibility.Always || monitor.isPrimary;
+    const filterByMonitor = temporalVisibility === WegTemporalItemsVisibility.OnMonitor;
 
     const windows = filterByMonitor
       ? interactables.value.filter((w) => w.monitor === monitor.id)
       : interactables.value;
 
-    return dockState.items.filter((item) => {
-      if (item.type !== "AppOrFile") {
-        return showPinned;
-      }
-      if (item.pinned && showPinned) {
-        return true;
-      }
-      return getWindowsForItem(item as any, windows).length > 0;
-    });
-  });
+    if (item.type !== "AppOrFile") {
+      return showPinned;
+    }
+    if (item.pinned && showPinned) {
+      return true;
+    }
+    return getWindowsForItem(item as any, windows).length > 0;
+  }
+
+  // splits the flat items array (left..., left-separator, center..., right-separator, ...right)
+  // into their three groups, same as the toolbar does
+  const groupedItems = $derived(listToGroups(dockState.items, true));
+  const visibleGroupedItems = $derived.by(() => ({
+    left: groupedItems.left.filter(isItemVisible),
+    center: groupedItems.center.filter(isItemVisible),
+    right: groupedItems.right.filter(isItemVisible),
+  }));
 
   const isEmpty = $derived(
-    visibleItems.filter((c) => c.type !== WegItemType.Separator).length === 0,
+    [
+      ...visibleGroupedItems.left,
+      ...visibleGroupedItems.center,
+      ...visibleGroupedItems.right,
+    ].filter((c) => c.type !== "Separator").length === 0,
   );
 
-  function onContextMenu() {
-    const { alignX, alignY } = getDockContextMenuAlignment(settingsState.position);
+  const itemIndexById = $derived.by(() => {
+    const map = new Map<string, number>();
+    dockState.items.forEach((item, i) => map.set(item.id, i));
+    return map;
+  });
+
+  function onContextMenu(e: MouseEvent) {
+    const alignX = settingsState.popupAlignX;
+    const alignY = settingsState.popupAlignY;
+    const cursor = { x: e.clientX, y: e.clientY };
     invoke(SeelenCommand.TriggerContextMenu, {
-      menu: { ...getSeelenWegMenu($t), alignX, alignY },
+      menu: { ...getSeelenWegMenu($t, cursor), alignX, alignY },
       forwardTo: null,
     });
   }
@@ -101,43 +115,17 @@
         {#if isEmpty}
           <span class="weg-empty-state-label">{$t("weg.empty")}</span>
         {:else}
-          {#each visibleItems as item, index (item.id)}
-            <DraggableItem {item} {index}>
-              {#if item.type === WegItemType.AppOrFile}
-                <UserApplication {item} />
-              {:else if item.type === WegItemType.StartMenu}
-                <StartMenu {item} />
-              {:else if item.type === WegItemType.ShowDesktop}
-                <ShowDesktop {item} />
-              {:else if item.type === WegItemType.Media}
-                <MediaSession {item} />
-              {:else if item.type === WegItemType.Separator}
-                <Separator {item} />
-              {:else if item.type === WegItemType.TrashBin}
-                <RecycleBin {item} />
-              {/if}
-            </DraggableItem>
-          {/each}
+          <DockItemsGroup id="left" items={visibleGroupedItems.left} {itemIndexById} />
+          <DockItemsGroup id="center" items={visibleGroupedItems.center} {itemIndexById} />
+          <DockItemsGroup id="right" items={visibleGroupedItems.right} {itemIndexById} />
         {/if}
       </div>
 
       <DragOverlay>
         {#snippet children(source)}
-          {@const overlayItem = visibleItems.find((c) => c.id === source.id)}
+          {@const overlayItem = dockState.items.find((c) => c.id === source.id)}
           {#if overlayItem}
-            {#if overlayItem.type === WegItemType.AppOrFile}
-              <UserApplication item={overlayItem} isOverlay={true} />
-            {:else if overlayItem.type === WegItemType.StartMenu}
-              <StartMenu item={overlayItem} />
-            {:else if overlayItem.type === WegItemType.ShowDesktop}
-              <ShowDesktop item={overlayItem} />
-            {:else if overlayItem.type === WegItemType.Media}
-              <MediaSession item={overlayItem} />
-            {:else if overlayItem.type === WegItemType.Separator}
-              <Separator item={overlayItem} />
-            {:else if overlayItem.type === WegItemType.TrashBin}
-              <RecycleBin item={overlayItem} />
-            {/if}
+            <WegItemSwitch item={overlayItem} isOverlay={true} />
           {/if}
         {/snippet}
       </DragOverlay>

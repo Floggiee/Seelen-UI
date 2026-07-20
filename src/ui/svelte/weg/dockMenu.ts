@@ -1,36 +1,38 @@
 import { invoke, SeelenCommand, Widget } from "@seelen-ui/lib";
 import { dialog } from "@seelen-ui/lib/tauri";
-import type { ContextMenu, WidgetId } from "@seelen-ui/lib/types";
+import type {
+  ContextMenu,
+  ContextMenuCallbackPayload,
+  ContextMenuItem,
+  PluginId,
+  WidgetId,
+} from "@seelen-ui/lib/types";
+import { getResourceText } from "libs/ui/react/utils/index.ts";
+import { locale } from "./i18n/index.ts";
 import { dockState, dockStateActions } from "./state/items.svelte.ts";
+import { isHorizontalDock } from "./state/settings.svelte.ts";
+import { plugins } from "./state/getters.svelte.ts";
 
-const identifier = crypto.randomUUID();
-const onBarMenuClick = "weg::bar_menu_click";
+const MENU_ID = crypto.randomUUID();
+const PLUGINS_SUBMENU_ID = crypto.randomUUID();
+
+const MENU_EVENT = "weg::bar_menu_click";
+const PLUGINS_SUBMENU_EVENT = "weg::toggle_plugin";
 
 let _t: (key: string) => string = (key) => key;
 
-type BarMenuKey =
-  | "add-start-module"
-  | "add-toggle-desktop-module"
-  | "add-media-module"
-  | "add-trash-bin-module"
-  | "add-item"
-  | "reorder"
-  | "task_manager"
-  | "settings";
-
-async function handleBarMenuClick(key: BarMenuKey) {
+async function handleBarMenuClick({ key, checked, value }: ContextMenuCallbackPayload) {
   switch (key) {
-    case "add-start-module":
-      dockStateActions.addStartModule();
+    case "add-separator":
+      dockStateActions.addSeparatorNear(value as { x: number; y: number });
       break;
-    case "add-toggle-desktop-module":
-      dockStateActions.addDesktopModule();
-      break;
-    case "add-media-module":
-      dockStateActions.addMediaModule();
-      break;
-    case "add-trash-bin-module":
-      dockStateActions.addTrashBinModule();
+    case "toggle-media-module":
+      if (checked) {
+        dockStateActions.addMediaModule();
+      } else {
+        dockStateActions.removeMediaModule();
+      }
+
       break;
     case "reorder":
       dockState.state = {
@@ -63,44 +65,59 @@ async function handleBarMenuClick(key: BarMenuKey) {
   }
 }
 
-Widget.self.webview.listen(onBarMenuClick, ({ payload }) => {
-  handleBarMenuClick((payload as { key: BarMenuKey }).key);
+Widget.self.webview.listen<ContextMenuCallbackPayload>(MENU_EVENT, ({ payload }) => {
+  handleBarMenuClick(payload);
 });
 
-export function getSeelenWegMenu(t: (key: string) => string): ContextMenu {
+Widget.self.webview.listen<ContextMenuCallbackPayload>(PLUGINS_SUBMENU_EVENT, ({ payload }) => {
+  const { key, checked } = payload;
+  if (checked) {
+    dockStateActions.addPlugin(key as PluginId);
+  } else {
+    dockStateActions.removePlugin(key as PluginId);
+  }
+});
+
+export function getSeelenWegMenu(
+  t: (key: string) => string,
+  cursor: { x: number; y: number },
+): ContextMenu {
   _t = t;
   const { isReorderDisabled } = dockState;
+  const language = locale.value;
+
+  function isPluginAdded(id: PluginId): boolean {
+    return dockState.items.some((item) => item.type === "Plugin" && item.plugin === id);
+  }
+
+  const pluginList = [
+    {
+      type: "Item",
+      key: "toggle-media-module",
+      icon: "PiMusicNotesPlusFill",
+      label: t("taskbar_menu.media"),
+      callbackEvent: MENU_EVENT,
+      checked: dockState.items.some((i) => i.type === "Media"),
+    },
+    ...plugins.value.map((plugin) => ({
+      type: "Item",
+      key: plugin.id,
+      label: getResourceText(plugin.metadata.displayName, language),
+      icon: plugin.icon,
+      callbackEvent: PLUGINS_SUBMENU_EVENT,
+      checked: isPluginAdded(plugin.id),
+    })),
+  ].toSorted((p1, p2) => p1.label.localeCompare(p2.label)) as ContextMenuItem[];
 
   return {
-    identifier,
+    identifier: MENU_ID,
     items: [
       {
-        type: "Item",
-        key: "add-start-module",
-        icon: "BsWindows",
-        label: t("taskbar_menu.start"),
-        callbackEvent: onBarMenuClick,
-      },
-      {
-        type: "Item",
-        key: "add-toggle-desktop-module",
-        icon: "IoDesktop",
-        label: t("taskbar_menu.desktop"),
-        callbackEvent: onBarMenuClick,
-      },
-      {
-        type: "Item",
-        key: "add-media-module",
-        icon: "PiMusicNotesPlusFill",
-        label: t("taskbar_menu.media"),
-        callbackEvent: onBarMenuClick,
-      },
-      {
-        type: "Item",
-        key: "add-trash-bin-module",
-        icon: "FaTrashAlt",
-        label: t("taskbar_menu.trash_bin"),
-        callbackEvent: onBarMenuClick,
+        type: "Submenu",
+        icon: "CgExtensionAdd",
+        label: t("taskbar_menu.modules"),
+        identifier: PLUGINS_SUBMENU_ID,
+        items: pluginList,
       },
       { type: "Separator" },
       {
@@ -108,29 +125,39 @@ export function getSeelenWegMenu(t: (key: string) => string): ContextMenu {
         key: "add-item",
         icon: "RiFileAddLine",
         label: t("taskbar_menu.add_file"),
-        callbackEvent: onBarMenuClick,
+        callbackEvent: MENU_EVENT,
+      },
+      {
+        type: "Item",
+        key: "add-separator",
+        icon: isHorizontalDock() ? "LuSeparatorVertical" : "LuSeparatorHorizontal",
+        label: t("taskbar_menu.add_separator"),
+        value: cursor,
+        callbackEvent: MENU_EVENT,
       },
       { type: "Separator" },
       {
         type: "Item",
         key: "reorder",
         icon: isReorderDisabled ? "CgLockUnlock" : "CgLock",
-        label: t(isReorderDisabled ? "context_menu.reorder_enable" : "context_menu.reorder_disable"),
-        callbackEvent: onBarMenuClick,
+        label: t(
+          isReorderDisabled ? "context_menu.reorder_enable" : "context_menu.reorder_disable",
+        ),
+        callbackEvent: MENU_EVENT,
       },
       {
         type: "Item",
         key: "task_manager",
         icon: "PiChartLineFill",
         label: t("taskbar_menu.task_manager"),
-        callbackEvent: onBarMenuClick,
+        callbackEvent: MENU_EVENT,
       },
       {
         type: "Item",
         key: "settings",
         icon: "RiSettings4Fill",
         label: t("taskbar_menu.settings"),
-        callbackEvent: onBarMenuClick,
+        callbackEvent: MENU_EVENT,
       },
     ],
   };

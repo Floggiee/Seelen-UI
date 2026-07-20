@@ -6,9 +6,9 @@
   import { convertFileSrc, invoke as tauriInvoke } from "@tauri-apps/api/core";
   import { t } from "../../i18n/index.ts";
   import type { MediaWegItem } from "../../types.ts";
-  import { settingsState, getDockContextMenuAlignment } from "../../state/settings.svelte.ts";
+  import { settingsState } from "../../state/settings.svelte.ts";
   import { getMenuForItem } from "../../generalMenu.ts";
-  import { players } from "../../state/system.svelte.ts";
+  import { players } from "../../state/getters.svelte.ts";
   import { calcLuminance } from "../../application.ts";
 
   interface Props {
@@ -44,7 +44,8 @@
 
   function onContextMenu(e: MouseEvent) {
     e.stopPropagation();
-    const { alignX, alignY } = getDockContextMenuAlignment(settingsState.position);
+    const alignX = settingsState.popupAlignX;
+    const alignY = settingsState.popupAlignY;
     invoke(SeelenCommand.TriggerContextMenu, {
       menu: { ...getMenuForItem($t, item), alignX, alignY },
       forwardTo: null,
@@ -56,6 +57,10 @@
       tauriInvoke(cmd, { id: session.umid }).catch(console.error);
     }
   }
+
+  const tooltip = $derived(
+    session ? `${session.title}\n${session.author}` : $t("media.label"),
+  );
 </script>
 
 <div
@@ -63,6 +68,9 @@
   class="weg-item media-session-container"
   class:media-session-container-horizontal={isHorizontal}
   class:media-session-container-vertical={!isHorizontal}
+  data-tooltip={tooltip}
+  data-tooltip-align-x={settingsState.popupAlignX}
+  data-tooltip-align-y={settingsState.popupAlignY}
   oncontextmenu={onContextMenu}
 >
   <div

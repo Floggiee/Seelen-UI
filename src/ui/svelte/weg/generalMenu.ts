@@ -1,8 +1,7 @@
 import { invoke, SeelenCommand, Widget } from "@seelen-ui/lib";
-import type { ContextMenu, ContextMenuItem, WidgetId } from "@seelen-ui/lib/types";
-import { WegItemType } from "@seelen-ui/lib/types";
+import type { ContextMenu, ContextMenuCallbackPayload, ContextMenuItem, WidgetId } from "@seelen-ui/lib/types";
 import type { SwItem } from "./types.ts";
-import { dockStateActions } from "./state/items.svelte.ts";
+import { dockStateActions, HARDCODED_SEPARATOR_LEFT, HARDCODED_SEPARATOR_RIGHT } from "./state/items.svelte.ts";
 import { iconPackManager } from "libs/ui/svelte/components/Icon/index.ts";
 
 const identifier = crypto.randomUUID();
@@ -10,29 +9,18 @@ const onItemMenuClick = "weg::item_menu_click";
 
 let pendingItem: SwItem | null = null;
 
-const customIconKeyMap: Record<string, string> = {
-  edit_icon_start: "@seelen/weg::start-menu",
-  edit_icon_desktop: "@seelen/weg::show-desktop",
-  edit_icon_bin_full: "bin::full",
-  edit_icon_bin_empty: "bin::empty",
-};
-
-Widget.self.webview.listen(onItemMenuClick, ({ payload }) => {
-  const { key } = payload as { key: string };
+Widget.self.webview.listen<ContextMenuCallbackPayload>(onItemMenuClick, ({ payload }) => {
+  const { key } = payload;
   const item = pendingItem;
   if (!item) return;
 
-  if (key === "remove" || key === "unpin") {
+  if (key === "remove") {
     dockStateActions.remove(item.id);
-  } else if (key === "open_location") {
-    if ("path" in item) {
-      invoke(SeelenCommand.SelectFileOnExplorer, { path: item.path });
-    }
   } else if (key === "empty_bin") {
     invoke(SeelenCommand.TrashBinEmpty);
-  } else if (key in customIconKeyMap) {
-    const iconKey = customIconKeyMap[key]!;
-    const entry = iconPackManager.value.getCustomIconEntry(iconKey);
+  } else if (key === "edit_custom_icon") {
+    const iconName = payload.value as string;
+    const entry = iconPackManager.value.getCustomIconEntry(iconName);
     invoke(SeelenCommand.TriggerWidget, {
       payload: {
         id: "@seelen/icon-editor" as WidgetId,
@@ -42,15 +30,34 @@ Widget.self.webview.listen(onItemMenuClick, ({ payload }) => {
   }
 });
 
+export function getEmptyTrashBinEntry(t: (key: string) => string): ContextMenuItem {
+  return {
+    type: "Item",
+    key: "empty_bin",
+    icon: "FaRegTrashAlt",
+    label: t("trash_bin.empty_bin"),
+    callbackEvent: onItemMenuClick,
+  };
+}
+
+export function getEditCustomIconEntry(
+  t: (key: string) => string,
+  iconName: string,
+): ContextMenuItem {
+  return {
+    type: "Item",
+    key: "edit_custom_icon",
+    value: iconName,
+    icon: "RiEditBoxLine",
+    label: t("context_menu.edit_icon"),
+    callbackEvent: onItemMenuClick,
+  };
+}
+
 export function getMenuForItem(t: (key: string) => string, item: SwItem): ContextMenu {
   pendingItem = item;
 
-  if (
-    item.type === WegItemType.ShowDesktop ||
-    item.type === WegItemType.Media ||
-    item.type === WegItemType.StartMenu ||
-    item.type === WegItemType.TrashBin
-  ) {
+  if (item.type === "Media" || item.type === "Plugin") {
     const items: ContextMenuItem[] = [
       {
         type: "Item",
@@ -61,84 +68,25 @@ export function getMenuForItem(t: (key: string) => string, item: SwItem): Contex
       },
     ];
 
-    if (item.type === WegItemType.TrashBin) {
-      items.unshift(
-        {
-          type: "Item",
-          key: "empty_bin",
-          icon: "FaRegTrashAlt",
-          label: t("trash_bin.empty_bin"),
-          callbackEvent: onItemMenuClick,
-        },
-        { type: "Separator" },
-        {
-          type: "Item",
-          key: "edit_icon_bin_full",
-          icon: "RiEditBoxLine",
-          label: t("trash_bin.edit_icon_full"),
-          callbackEvent: onItemMenuClick,
-        },
-        {
-          type: "Item",
-          key: "edit_icon_bin_empty",
-          icon: "RiEditBoxLine",
-          label: t("trash_bin.edit_icon_empty"),
-          callbackEvent: onItemMenuClick,
-        },
-        { type: "Separator" },
-      );
-    }
-
-    if (item.type === WegItemType.StartMenu) {
-      items.unshift(
-        {
-          type: "Item",
-          key: "edit_icon_start",
-          icon: "RiEditBoxLine",
-          label: t("context_menu.edit_icon"),
-          callbackEvent: onItemMenuClick,
-        },
-        { type: "Separator" },
-      );
-    }
-
-    if (item.type === WegItemType.ShowDesktop) {
-      items.unshift(
-        {
-          type: "Item",
-          key: "edit_icon_desktop",
-          icon: "RiEditBoxLine",
-          label: t("context_menu.edit_icon"),
-          callbackEvent: onItemMenuClick,
-        },
-        { type: "Separator" },
-      );
-    }
-
     return { identifier, items };
   }
 
-  if (item.type === WegItemType.AppOrFile) {
-    return {
-      identifier,
-      items: [
-        {
-          type: "Item",
-          key: "unpin",
-          icon: "RiUnpinLine",
-          label: t("app_menu.unpin"),
-          callbackEvent: onItemMenuClick,
-        },
-        { type: "Separator" },
-        {
-          type: "Item",
-          key: "open_location",
-          icon: "MdOutlineMyLocation",
-          label: t("app_menu.open_file_location"),
-          callbackEvent: onItemMenuClick,
-        },
-      ],
-    };
+  if (
+    item.type === "Separator" &&
+    item.id !== HARDCODED_SEPARATOR_LEFT.id &&
+    item.id !== HARDCODED_SEPARATOR_RIGHT.id
+  ) {
+    const items: ContextMenuItem[] = [
+      {
+        type: "Item",
+        key: "remove",
+        icon: "IoRemove",
+        label: t("context_menu.remove_separator"),
+        callbackEvent: onItemMenuClick,
+      },
+    ];
+
+    return { identifier, items };
   }
 
   return { identifier, items: [] };

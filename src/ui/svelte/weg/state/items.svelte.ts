@@ -1,10 +1,11 @@
 import { invoke, SeelenCommand, SeelenEvent, subscribe } from "@seelen-ui/lib";
-import { type WegItem, type WegItems, WegItemType } from "@seelen-ui/lib/types";
+import type { PluginId, WegItem, WegItems } from "@seelen-ui/lib/types";
 import { debounce } from "lodash";
 import { emit, listen } from "@tauri-apps/api/event";
 import type { AppOrFileWegItem, SeparatorWegItem } from "../types.ts";
 import { getWindowsForItem, interactables } from "./windows.svelte.ts";
 import { wegItems } from "./getters.svelte.ts";
+import { isHorizontalDock } from "./settings.svelte.ts";
 
 interface OptimisticDockState {
   isReorderDisabled: boolean;
@@ -20,12 +21,12 @@ const CLIENT_ID = crypto.randomUUID();
 
 export const HARDCODED_SEPARATOR_LEFT: SeparatorWegItem = {
   id: "hardcoded-separator-1",
-  type: WegItemType.Separator,
+  type: "Separator",
 };
 
 export const HARDCODED_SEPARATOR_RIGHT: SeparatorWegItem = {
   id: "hardcoded-separator-2",
-  type: WegItemType.Separator,
+  type: "Separator",
 };
 
 function getStateFromStored(state: WegItems): OptimisticDockState {
@@ -65,7 +66,7 @@ subscribe(SeelenEvent.WegAddItem, (e) => {
   const item: WegItem = {
     ...e.payload,
     id: crypto.randomUUID(),
-    type: WegItemType.AppOrFile,
+    type: "AppOrFile",
   };
 
   const items = [..._dockState.items];
@@ -87,18 +88,25 @@ const emitSyncEvent = debounce((state: OptimisticDockState) => {
   emit<SyncPayload>("hidden::sync-dock-items", { source: CLIENT_ID, state });
 }, 300);
 
+export function listToGroups(items: WegItem[], includeSeparator = false) {
+  let idx1 = items.findIndex((i) => typeof i !== "string" && i.id === HARDCODED_SEPARATOR_LEFT.id);
+  let idx2 = items.findIndex((i) => typeof i !== "string" && i.id === HARDCODED_SEPARATOR_RIGHT.id);
+  if (idx1 > idx2) {
+    [idx1, idx2] = [idx2, idx1];
+  }
+  return {
+    left: items.slice(0, idx1),
+    center: includeSeparator ? items.slice(idx1, idx2 + 1) : items.slice(idx1 + 1, idx2),
+    right: items.slice(idx2 + 1),
+  };
+}
+
 const saveDockState = debounce(async (state: OptimisticDockState) => {
   console.trace("Saving dock state");
-
-  const index1 = state.items.findIndex((i) => i.id === HARDCODED_SEPARATOR_LEFT.id);
-  const index2 = state.items.findIndex((i) => i.id === HARDCODED_SEPARATOR_RIGHT.id);
-
   await invoke(SeelenCommand.StateWriteWegItems, {
     items: {
       isReorderDisabled: state.isReorderDisabled,
-      left: state.items.slice(0, index1),
-      center: state.items.slice(index1 + 1, index2),
-      right: state.items.slice(index2 + 1),
+      ...listToGroups(state.items),
     },
   });
 }, 1000);
@@ -143,36 +151,70 @@ export const dockStateActions = {
     };
   },
   addMediaModule() {
-    if (!_dockState.items.some((i) => i.type === WegItemType.Media)) {
+    if (!_dockState.items.some((i) => i.type === "Media")) {
       _dockState = {
         ..._dockState,
-        items: [..._dockState.items, { id: crypto.randomUUID(), type: WegItemType.Media }],
+        items: [..._dockState.items, { id: crypto.randomUUID(), type: "Media" }],
       };
     }
   },
-  addStartModule() {
-    if (!_dockState.items.some((i) => i.type === WegItemType.StartMenu)) {
+  removeMediaModule() {
+    _dockState = {
+      ..._dockState,
+      items: _dockState.items.filter((i) => i.type !== "Media"),
+    };
+  },
+  addPlugin(plugin: PluginId) {
+    if (!_dockState.items.some((i) => i.type === "Plugin" && i.plugin === plugin)) {
       _dockState = {
         ..._dockState,
-        items: [{ id: crypto.randomUUID(), type: WegItemType.StartMenu }, ..._dockState.items],
+        items: [..._dockState.items, { id: crypto.randomUUID(), type: "Plugin", plugin }],
       };
     }
   },
-  addDesktopModule() {
-    if (!_dockState.items.some((i) => i.type === WegItemType.ShowDesktop)) {
-      _dockState = {
-        ..._dockState,
-        items: [{ id: crypto.randomUUID(), type: WegItemType.ShowDesktop }, ..._dockState.items],
-      };
-    }
+  removePlugin(plugin: PluginId) {
+    _dockState = {
+      ..._dockState,
+      items: _dockState.items.filter((i) => !(i.type === "Plugin" && i.plugin === plugin)),
+    };
   },
-  addTrashBinModule() {
-    if (!_dockState.items.some((i) => i.type === WegItemType.TrashBin)) {
-      _dockState = {
-        ..._dockState,
-        items: [..._dockState.items, { id: crypto.randomUUID(), type: WegItemType.TrashBin }],
-      };
+  /** Inserts a new separator next to whichever rendered item is closest to the given cursor position. */
+  addSeparatorNear(cursor: { x: number; y: number }) {
+    const newSeparator: SeparatorWegItem = { id: crypto.randomUUID(), type: "Separator" };
+    const items = [..._dockState.items];
+
+    const containers = Array.from(
+      document.querySelectorAll<HTMLElement>(".weg-item-drag-container"),
+    );
+
+    let insertIdx = items.findIndex((i) => i.id === HARDCODED_SEPARATOR_RIGHT.id);
+
+    if (containers.length > 0) {
+      const horizontal = isHorizontalDock();
+      let nearestId: string | undefined;
+      let nearestDist = Infinity;
+      let insertAfter = false;
+
+      for (const el of containers) {
+        const rect = el.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const dist = Math.hypot(cursor.x - cx, cursor.y - cy);
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearestId = el.dataset.itemId;
+          insertAfter = horizontal ? cursor.x > cx : cursor.y > cy;
+        }
+      }
+
+      const nearestIdx = items.findIndex((i) => i.id === nearestId);
+      if (nearestIdx !== -1) {
+        insertIdx = insertAfter ? nearestIdx + 1 : nearestIdx;
+      }
     }
+
+    items.splice(insertIdx, 0, newSeparator);
+    _dockState = { ..._dockState, items };
   },
 };
 
@@ -182,7 +224,7 @@ $effect.root(() => {
     const state = _dockState;
 
     const appOrFileItems = state.items.filter(
-      (item): item is AppOrFileWegItem => item.type === WegItemType.AppOrFile,
+      (item): item is AppOrFileWegItem => item.type === "AppOrFile",
     );
 
     const itemsToRemove = new Set(
@@ -207,7 +249,7 @@ $effect.root(() => {
 
       newItems.push({
         id: crypto.randomUUID(),
-        type: WegItemType.AppOrFile,
+        type: "AppOrFile",
         displayName: w.appName,
         umid: w.umid ?? null,
         path: w.process.path?.toString() ?? "",
